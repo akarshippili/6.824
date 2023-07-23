@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -10,9 +11,10 @@ import (
 
 type Coordinator struct {
 	// Your definitions here.
-	input     []string
-	nReduce   int
-	completed []bool
+	input        []string
+	nReduce      int
+	completed    []bool
+	tasksChannel chan string
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -39,7 +41,9 @@ func (c *Coordinator) server() {
 	go http.Serve(l, nil)
 }
 
-func (c *Coordinator) AssignInput(args *ExampleArgs, reply *ExampleReply) error {
+func (c *Coordinator) AssignTask(args *AssignTaskRequest, reply *AssignTaskResponse) error {
+	fmt.Printf("Recived a request from worker process id %v \n", args.Pid)
+	reply.Filename = <-c.tasksChannel
 	return nil
 }
 
@@ -58,12 +62,19 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{
-		input:     files,
-		nReduce:   nReduce,
-		completed: make([]bool, len(files)),
+		input:        files,
+		nReduce:      nReduce,
+		completed:    make([]bool, len(files)),
+		tasksChannel: make(chan string),
 	}
 
 	// Your code here.
+
+	go func() {
+		for _, file := range files {
+			c.tasksChannel <- file
+		}
+	}()
 
 	c.server()
 	return &c

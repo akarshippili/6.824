@@ -5,6 +5,7 @@ import (
 	"hash/fnv"
 	"log"
 	"net/rpc"
+	"os"
 )
 
 // Map functions return a slice of KeyValue.
@@ -31,6 +32,17 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 
 	// 1. call coordinater and get the task to run
 	// 2. run the task.
+	request := AssignTaskRequest{
+		Pid: os.Getpid(),
+	}
+	response := AssignTaskResponse{}
+
+	ok := call("Coordinator.AssignTask", &request, &response)
+	if !ok {
+		fmt.Println("Error!!! Error!!! Error!!! :)")
+	} else {
+		fmt.Printf("filename: %v \n", response.Filename)
+	}
 
 }
 

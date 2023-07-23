@@ -35,3 +35,10 @@ func coordinatorSock() string {
 	s += strconv.Itoa(os.Getuid())
 	return s
 }
+
+type AssignTaskRequest struct {
+	Pid int
+}
+type AssignTaskResponse struct {
+	Filename string
+}
