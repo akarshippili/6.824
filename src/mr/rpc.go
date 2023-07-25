@@ -40,5 +40,6 @@ type AssignTaskRequest struct {
 	Pid int
 }
 type AssignTaskResponse struct {
-	Filename string
+	Task Task
+	Done bool
 }

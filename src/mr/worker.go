@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"log"
@@ -22,16 +23,7 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-// main/mrworker.go calls this function.
-func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
-
-	// Your worker implementation here.
-
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
-
-	// 1. call coordinater and get the task to run
-	// 2. run the task.
+func AssignTaskCall() (AssignTaskResponse, error) {
 	request := AssignTaskRequest{
 		Pid: os.Getpid(),
 	}
@@ -39,38 +31,12 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 
 	ok := call("Coordinator.AssignTask", &request, &response)
 	if !ok {
-		fmt.Println("Error!!! Error!!! Error!!! :)")
-	} else {
-		fmt.Printf("filename: %v \n", response.Filename)
+		return response, errors.New("assign task rpc call failed")
+	} else if response.Done {
+		return response, errors.New("all task have been assigned")
 	}
 
-}
-
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
-	}
+	return response, nil
 }
 
 // send an RPC request to the coordinator, wait for the response.
@@ -92,4 +58,34 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 
 	fmt.Println(err)
 	return false
+}
+
+// main/mrworker.go calls this function.
+func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
+
+	// Your worker implementation here.
+
+	// TODO
+	//  1. call coordinater and get the task to run
+	// 2. run the task.
+	// 3. save the key values in intermideate files with mr-X-Y.json format
+
+	response, err := AssignTaskCall()
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
+	task := response.Task
+	fmt.Printf("Task id: [%v] filename: [%v] \n", task.Id, task.Filename)
+
+	filepath := "../main/" + task.Filename
+	content, err := os.ReadFile(filepath)
+	if err != nil {
+		fmt.Printf("error reading file: %v \n", err.Error())
+		return
+	}
+
+	kva := mapf(task.Filename, string(content))
+	fmt.Printf("intermediate key-value pairs %v \n", len(kva))
 }

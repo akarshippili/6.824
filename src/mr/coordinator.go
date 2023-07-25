@@ -14,7 +14,12 @@ type Coordinator struct {
 	input        []string
 	nReduce      int
 	completed    []bool
-	tasksChannel chan string
+	tasksChannel chan Task
+}
+
+type Task struct {
+	Filename string
+	Id       int
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -43,7 +48,16 @@ func (c *Coordinator) server() {
 
 func (c *Coordinator) AssignTask(args *AssignTaskRequest, reply *AssignTaskResponse) error {
 	fmt.Printf("Recived a request from worker process id %v \n", args.Pid)
-	reply.Filename = <-c.tasksChannel
+	task, ok := <-c.tasksChannel
+
+	if !ok {
+		reply.Task = Task{}
+		reply.Done = true
+		return nil
+	}
+
+	reply.Task = task
+	reply.Done = false
 	return nil
 }
 
@@ -65,15 +79,20 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		input:        files,
 		nReduce:      nReduce,
 		completed:    make([]bool, len(files)),
-		tasksChannel: make(chan string),
+		tasksChannel: make(chan Task),
 	}
 
 	// Your code here.
 
 	go func() {
-		for _, file := range files {
-			c.tasksChannel <- file
+		for index, file := range files {
+			c.tasksChannel <- Task{
+				Filename: file,
+				Id:       index,
+			}
 		}
+
+		close(c.tasksChannel)
 	}()
 
 	c.server()
