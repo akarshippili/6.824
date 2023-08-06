@@ -1,12 +1,15 @@
 package mr
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
 	"log"
 	"net/rpc"
 	"os"
+	"strconv"
+	"sync"
 )
 
 // Map functions return a slice of KeyValue.
@@ -60,6 +63,34 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	return false
 }
 
+func splitToBuckets(kva []KeyValue, numBuckets int) [][]KeyValue {
+	buckets := make([][]KeyValue, numBuckets)
+
+	for _, kv := range kva {
+		buckets[ihash(kv.Key)%numBuckets] = append(buckets[ihash(kv.Key)%numBuckets], kv)
+	}
+
+	return buckets
+}
+
+func writeToIntermediateFiles(mapId int, index int, bucket []KeyValue) {
+	interMediateFileName := "map" + "-" + strconv.Itoa(mapId) + "-" + strconv.Itoa(index)
+	file, err := os.Create(interMediateFileName)
+	if err != nil {
+		fmt.Printf("error creating file: %v \n", err.Error())
+		return
+	}
+
+	encoder := json.NewEncoder(file)
+	for _, kv := range bucket {
+		err := encoder.Encode(kv)
+		if err != nil {
+			fmt.Printf("error writing to file: task id %v, key: %v, value %v, cause %v \n", mapId, kv.Key, kv.Value, err.Error())
+			continue
+		}
+	}
+}
+
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
 
@@ -76,6 +107,7 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 		return
 	}
 
+	nReduce := response.NReduce
 	task := response.Task
 	fmt.Printf("Task id: [%v] filename: [%v] \n", task.Id, task.Filename)
 
@@ -88,4 +120,21 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 
 	kva := mapf(task.Filename, string(content))
 	fmt.Printf("intermediate key-value pairs %v \n", len(kva))
+
+	buckets := splitToBuckets(kva, nReduce)
+	var wg sync.WaitGroup
+
+	for index, bucket := range buckets {
+		index := index
+		bucket := bucket
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+			writeToIntermediateFiles(task.Id, index, bucket)
+		}()
+	}
+
+	wg.Wait()
+	fmt.Printf("Done Map Task id: [%v]\n", task.Id)
 }

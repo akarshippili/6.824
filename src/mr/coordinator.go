@@ -53,11 +53,13 @@ func (c *Coordinator) AssignTask(args *AssignTaskRequest, reply *AssignTaskRespo
 	if !ok {
 		reply.Task = Task{}
 		reply.Done = true
+		reply.NReduce = 0
 		return nil
 	}
 
 	reply.Task = task
 	reply.Done = false
+	reply.NReduce = c.nReduce
 	return nil
 }
 

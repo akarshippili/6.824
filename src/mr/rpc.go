@@ -40,6 +40,7 @@ type AssignTaskRequest struct {
 	Pid int
 }
 type AssignTaskResponse struct {
-	Task Task
-	Done bool
+	Task    Task
+	NReduce int
+	Done    bool
 }
