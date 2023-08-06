@@ -74,7 +74,7 @@ func splitToBuckets(kva []KeyValue, numBuckets int) [][]KeyValue {
 }
 
 func writeToIntermediateFiles(mapId int, index int, bucket []KeyValue) {
-	interMediateFileName := "map" + "-" + strconv.Itoa(mapId) + "-" + strconv.Itoa(index)
+	interMediateFileName := "./data/" + "map" + "-" + strconv.Itoa(mapId) + "-" + strconv.Itoa(index)
 	file, err := os.Create(interMediateFileName)
 	if err != nil {
 		fmt.Printf("error creating file: %v \n", err.Error())
