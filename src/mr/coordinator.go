@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"sync"
 )
 
 type Coordinator struct {
@@ -21,6 +22,8 @@ type Task struct {
 	Filename string
 	Id       int
 }
+
+var mapWg sync.WaitGroup
 
 // Your code here -- RPC handlers for the worker to call.
 
@@ -73,6 +76,12 @@ func (c *Coordinator) Done() bool {
 	return ret
 }
 
+func (c *Coordinator) DoneMapTask(args bool, reply *bool) error {
+	mapWg.Done()
+	*reply = true
+	return nil
+}
+
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
@@ -88,13 +97,15 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 
 	go func() {
 		for index, file := range files {
+			mapWg.Add(1)
 			c.tasksChannel <- Task{
 				Filename: file,
 				Id:       index,
 			}
 		}
-
 		close(c.tasksChannel)
+		mapWg.Wait()
+		fmt.Println("Done Waiting All Map task to complete")
 	}()
 
 	c.server()

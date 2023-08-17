@@ -42,6 +42,18 @@ func AssignTaskCall() (AssignTaskResponse, error) {
 	return response, nil
 }
 
+func DoneMapTaskCall() error {
+	request := true
+	var response bool
+
+	ok := call("Coordinator.DoneMapTask", &request, &response)
+	if !ok {
+		return errors.New("done map task rpc call failed")
+	}
+
+	return nil
+}
+
 // send an RPC request to the coordinator, wait for the response.
 // usually returns true.
 // returns false if something goes wrong.
@@ -136,5 +148,8 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 	}
 
 	wg.Wait()
+	if err := DoneMapTaskCall(); err != nil {
+		fmt.Printf("Error during rpc call: %v", err.Error())
+	}
 	fmt.Printf("Done Map Task id: [%v]\n", task.Id)
 }
