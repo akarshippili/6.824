@@ -3,13 +3,13 @@ package mr
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"hash/fnv"
 	"log"
 	"net/rpc"
 	"os"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // Map functions return a slice of KeyValue.
@@ -35,8 +35,6 @@ func AssignTaskCall() (AssignTaskResponse, error) {
 	ok := call("Coordinator.AssignTask", &request, &response)
 	if !ok {
 		return response, errors.New("assign task rpc call failed")
-	} else if response.Done {
-		return response, errors.New("all task have been assigned")
 	}
 
 	return response, nil
@@ -71,7 +69,7 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 		return true
 	}
 
-	fmt.Println(err)
+	log.Println(err)
 	return false
 }
 
@@ -89,7 +87,7 @@ func writeToIntermediateFiles(mapId int, index int, bucket []KeyValue) {
 	interMediateFileName := "./data/" + "map" + "-" + strconv.Itoa(mapId) + "-" + strconv.Itoa(index)
 	file, err := os.Create(interMediateFileName)
 	if err != nil {
-		fmt.Printf("error creating file: %v \n", err.Error())
+		log.Printf("error creating file: %v \n", err.Error())
 		return
 	}
 
@@ -97,10 +95,47 @@ func writeToIntermediateFiles(mapId int, index int, bucket []KeyValue) {
 	for _, kv := range bucket {
 		err := encoder.Encode(kv)
 		if err != nil {
-			fmt.Printf("error writing to file: task id %v, key: %v, value %v, cause %v \n", mapId, kv.Key, kv.Value, err.Error())
+			log.Printf("error writing to file: task id %v, key: %v, value %v, cause %v \n", mapId, kv.Key, kv.Value, err.Error())
 			continue
 		}
 	}
+}
+
+func HandleMapTask(task Task, nReduce int, mapf func(string, string) []KeyValue) {
+	log.Printf("Task id: [%v] filename: [%v] \n", task.Id, task.Input)
+	filepath := "../main/" + task.Input
+	content, err := os.ReadFile(filepath)
+	if err != nil {
+		log.Printf("error reading file: %v \n", err.Error())
+		return
+	}
+
+	kva := mapf(task.Input, string(content))
+	log.Printf("intermediate key-value pairs %v \n", len(kva))
+
+	buckets := splitToBuckets(kva, nReduce)
+	var wg sync.WaitGroup
+
+	for index, bucket := range buckets {
+		index := index
+		bucket := bucket
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+			writeToIntermediateFiles(task.Id, index, bucket)
+		}()
+	}
+
+	wg.Wait()
+	if err := DoneMapTaskCall(); err != nil {
+		log.Printf("Error during rpc call: %v", err.Error())
+	}
+	log.Printf("Done Map Task id: [%v]\n", task.Id)
+}
+
+func HandleReduceTask(task Task, reducef func(string, []string) string) {
+	panic("unimplemented")
 }
 
 // main/mrworker.go calls this function.
@@ -121,35 +156,15 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 
 	nReduce := response.NReduce
 	task := response.Task
-	fmt.Printf("Task id: [%v] filename: [%v] \n", task.Id, task.Filename)
 
-	filepath := "../main/" + task.Filename
-	content, err := os.ReadFile(filepath)
-	if err != nil {
-		fmt.Printf("error reading file: %v \n", err.Error())
+	switch task.TaskType {
+	case Wait:
+		time.Sleep(time.Second)
+		Worker(mapf, reducef)
 		return
+	case MapTask:
+		HandleMapTask(task, nReduce, mapf)
+	case ReduceTask:
+		HandleReduceTask(task, reducef)
 	}
-
-	kva := mapf(task.Filename, string(content))
-	fmt.Printf("intermediate key-value pairs %v \n", len(kva))
-
-	buckets := splitToBuckets(kva, nReduce)
-	var wg sync.WaitGroup
-
-	for index, bucket := range buckets {
-		index := index
-		bucket := bucket
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-			writeToIntermediateFiles(task.Id, index, bucket)
-		}()
-	}
-
-	wg.Wait()
-	if err := DoneMapTaskCall(); err != nil {
-		fmt.Printf("Error during rpc call: %v", err.Error())
-	}
-	fmt.Printf("Done Map Task id: [%v]\n", task.Id)
 }

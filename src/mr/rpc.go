@@ -42,5 +42,4 @@ type AssignTaskRequest struct {
 type AssignTaskResponse struct {
 	Task    Task
 	NReduce int
-	Done    bool
 }

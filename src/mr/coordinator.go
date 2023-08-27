@@ -1,7 +1,6 @@
 package mr
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -16,14 +15,9 @@ type Coordinator struct {
 	nReduce      int
 	completed    []bool
 	tasksChannel chan Task
+	mapWg        sync.WaitGroup
+	currentPhase Phase
 }
-
-type Task struct {
-	Filename string
-	Id       int
-}
-
-var mapWg sync.WaitGroup
 
 // Your code here -- RPC handlers for the worker to call.
 
@@ -50,18 +44,20 @@ func (c *Coordinator) server() {
 }
 
 func (c *Coordinator) AssignTask(args *AssignTaskRequest, reply *AssignTaskResponse) error {
-	fmt.Printf("Recived a request from worker process id %v \n", args.Pid)
+	log.Printf("Recived a request from worker process id %v \n", args.Pid)
 	task, ok := <-c.tasksChannel
 
 	if !ok {
-		reply.Task = Task{}
-		reply.Done = true
+		reply.Task = Task{
+			Id:       -1,
+			Input:    "",
+			TaskType: Wait,
+		}
 		reply.NReduce = 0
 		return nil
 	}
 
 	reply.Task = task
-	reply.Done = false
 	reply.NReduce = c.nReduce
 	return nil
 }
@@ -77,9 +73,27 @@ func (c *Coordinator) Done() bool {
 }
 
 func (c *Coordinator) DoneMapTask(args bool, reply *bool) error {
-	mapWg.Done()
+	c.mapWg.Done()
 	*reply = true
 	return nil
+}
+
+func (c *Coordinator) InitMapTasks() {
+	for index, file := range c.input {
+		c.mapWg.Add(1)
+		c.tasksChannel <- Task{
+			Input:    file,
+			Id:       index,
+			TaskType: MapTask,
+		}
+	}
+	close(c.tasksChannel)
+}
+
+func (c *Coordinator) InitReduceTasks() {
+	c.mapWg.Wait()
+	c.currentPhase = ReducePhase
+	log.Println("Done Waiting All Map task to complete")
 }
 
 // create a Coordinator.
@@ -91,22 +105,13 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		nReduce:      nReduce,
 		completed:    make([]bool, len(files)),
 		tasksChannel: make(chan Task),
+		currentPhase: MapPhase,
 	}
 
 	// Your code here.
 
-	go func() {
-		for index, file := range files {
-			mapWg.Add(1)
-			c.tasksChannel <- Task{
-				Filename: file,
-				Id:       index,
-			}
-		}
-		close(c.tasksChannel)
-		mapWg.Wait()
-		fmt.Println("Done Waiting All Map task to complete")
-	}()
+	go c.InitMapTasks()
+	go c.InitReduceTasks()
 
 	c.server()
 	return &c
