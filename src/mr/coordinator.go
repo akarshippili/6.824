@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"strconv"
 	"sync"
 )
 
@@ -44,10 +45,28 @@ func (c *Coordinator) server() {
 }
 
 func (c *Coordinator) AssignTask(args *AssignTaskRequest, reply *AssignTaskResponse) error {
-	log.Printf("Recived a request from worker process id %v \n", args.Pid)
-	task, ok := <-c.tasksChannel
+	/*
+		Initially assign MapTasks.
+		When no MapsTasks are left but, few are yet to complete then assign WaitTask.
+		Once all MapTasks done execiting then assign ReduceTasks.
+		Once all ReduceTasks done executing assign TreminateTasks.
+	*/
 
-	if !ok {
+	log.Printf("Recived a request from worker process id %v \n", args.Pid)
+
+	select {
+	case task, ok := <-c.tasksChannel:
+		if !ok {
+			reply.Task = Task{
+				TaskType: Terminate,
+			}
+			return nil
+		}
+
+		reply.Task = task
+		reply.NReduce = c.nReduce
+		return nil
+	default:
 		reply.Task = Task{
 			Id:       -1,
 			Input:    "",
@@ -57,9 +76,6 @@ func (c *Coordinator) AssignTask(args *AssignTaskRequest, reply *AssignTaskRespo
 		return nil
 	}
 
-	reply.Task = task
-	reply.NReduce = c.nReduce
-	return nil
 }
 
 // main/mrcoordinator.go calls Done() periodically to find out
@@ -79,6 +95,7 @@ func (c *Coordinator) DoneMapTask(args bool, reply *bool) error {
 }
 
 func (c *Coordinator) InitMapTasks() {
+	log.Println("Starting Map Phase")
 	for index, file := range c.input {
 		c.mapWg.Add(1)
 		c.tasksChannel <- Task{
@@ -87,13 +104,26 @@ func (c *Coordinator) InitMapTasks() {
 			TaskType: MapTask,
 		}
 	}
-	close(c.tasksChannel)
 }
 
 func (c *Coordinator) InitReduceTasks() {
 	c.mapWg.Wait()
 	c.currentPhase = ReducePhase
-	log.Println("Done Waiting All Map task to complete")
+	log.Println("Starting Reduce Phase")
+
+	for i := 0; i < c.nReduce; i++ {
+		c.tasksChannel <- Task{
+			Input:    strconv.Itoa(i),
+			Id:       i,
+			TaskType: ReduceTask,
+		}
+	}
+	close(c.tasksChannel)
+}
+
+func (c *Coordinator) InitTasks() {
+	go c.InitMapTasks()
+	go c.InitReduceTasks()
 }
 
 // create a Coordinator.
@@ -109,9 +139,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	}
 
 	// Your code here.
-
-	go c.InitMapTasks()
-	go c.InitReduceTasks()
+	c.InitTasks()
 
 	c.server()
 	return &c

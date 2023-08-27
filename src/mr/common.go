@@ -12,6 +12,7 @@ const (
 	MapTask TaskType = iota
 	ReduceTask
 	Wait
+	Terminate
 )
 
 const (

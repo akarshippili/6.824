@@ -162,6 +162,8 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 		time.Sleep(time.Second)
 		Worker(mapf, reducef)
 		return
+	case Terminate:
+		os.Exit(0)
 	case MapTask:
 		HandleMapTask(task, nReduce, mapf)
 	case ReduceTask:
