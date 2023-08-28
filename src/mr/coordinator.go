@@ -91,13 +91,13 @@ func (c *Coordinator) Done() bool {
 func (c *Coordinator) DoneMapTask(args bool, reply *bool) error {
 	c.mapWg.Done()
 	*reply = true
+	log.Printf("Completed Map Task")
 	return nil
 }
 
 func (c *Coordinator) InitMapTasks() {
 	log.Println("Starting Map Phase")
 	for index, file := range c.input {
-		c.mapWg.Add(1)
 		c.tasksChannel <- Task{
 			Input:    file,
 			Id:       index,
@@ -139,6 +139,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	}
 
 	// Your code here.
+	c.mapWg.Add(len(files))
 	c.InitTasks()
 
 	c.server()
