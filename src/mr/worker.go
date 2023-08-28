@@ -3,10 +3,12 @@ package mr
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"hash/fnv"
 	"log"
 	"net/rpc"
 	"os"
+	"regexp"
 	"strconv"
 	"sync"
 	"time"
@@ -134,8 +136,108 @@ func HandleMapTask(task Task, nReduce int, mapf func(string, string) []KeyValue)
 	log.Printf("Done Map Task id: [%v]\n", task.Id)
 }
 
+func GetFilesWithPattern(path string, regex *regexp.Regexp) ([]*os.File, error) {
+
+	files, err := os.ReadDir(path)
+	if err != nil {
+		return nil, errors.New("error while reading dir " + err.Error())
+	}
+
+	fs := make([]*os.File, 0)
+	for _, f := range files {
+		if regex.MatchString(f.Name()) {
+			file, err := os.Open(path + f.Name())
+			if err != nil {
+				return nil, errors.New("error while opening the file " + err.Error())
+			}
+
+			fs = append(fs, file)
+		}
+	}
+
+	return fs, nil
+}
+
+func GetKeyValueArray(s string) ([]KeyValue, error) {
+	pattern := "map-[0-9]+-" + s + "$"
+	regex, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, errors.New(err.Error())
+	}
+
+	files, err := GetFilesWithPattern("./data/", regex)
+	if err != nil {
+		return nil, errors.New(err.Error())
+	}
+	log.Printf("Found %v files with %v pattern", files, pattern)
+
+	var wg sync.WaitGroup
+	kvChan := make(chan KeyValue)
+	kva := make([]KeyValue, 0, 10)
+
+	for _, file := range files {
+		wg.Add(1)
+		go func(file *os.File) {
+			defer wg.Done()
+
+			decoder := json.NewDecoder(file)
+			for {
+				var kv KeyValue
+				if err := decoder.Decode(&kv); err != nil {
+					break
+				}
+				kvChan <- kv
+			}
+		}(file)
+	}
+
+	go func() {
+		wg.Wait()
+		close(kvChan)
+	}()
+
+	for kv := range kvChan {
+		kva = append(kva, kv)
+	}
+	return kva, nil
+}
+
+func buildMap(kva []KeyValue) map[string][]string {
+	kvMap := make(map[string][]string)
+
+	for _, kv := range kva {
+		if _, ok := kvMap[kv.Key]; !ok {
+			kvMap[kv.Key] = make([]string, 0)
+		}
+
+		kvMap[kv.Key] = append(kvMap[kv.Key], kv.Value)
+	}
+
+	return kvMap
+}
+
 func HandleReduceTask(task Task, reducef func(string, []string) string) {
-	panic("unimplemented")
+	/*
+		1. read from file in data folder
+		2. deserialize to go objects
+		3. call reduce funtion on the objects
+	*/
+	kva, err := GetKeyValueArray(task.Input)
+	if err != nil {
+		log.Fatalln(err.Error())
+	}
+
+	kvMap := buildMap(kva) // kvMap := make(map[string][]string, 0)
+	file, err := os.Create("./data/" + "mr" + "-" + "out" + "-" + strconv.Itoa(task.Id))
+	if err != nil {
+		log.Fatalln(err.Error())
+		return
+	}
+
+	for key, value := range kvMap {
+		reduced := reducef(key, value)
+		fmt.Fprintf(file, "%v %v\n", key, reduced)
+	}
 }
 
 // main/mrworker.go calls this function.
