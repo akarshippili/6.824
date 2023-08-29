@@ -1,29 +1,30 @@
 package mr
 
 import (
-	"fmt"
+	"errors"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
+	"strconv"
 	"sync"
+	"time"
 )
 
 type Coordinator struct {
 	// Your definitions here.
-	input        []string
-	nReduce      int
-	completed    []bool
-	tasksChannel chan Task
+	input                    []string
+	nReduce                  int
+	mapTaskIsComplete        []bool
+	reduceTaskIsComplete     []bool
+	remainingMapTasksCount   int
+	remainingReduceTaskCount int
+	tasksChannel             chan Task
+	mapWg                    sync.WaitGroup
+	reduceWg                 sync.WaitGroup
+	currentPhase             Phase
 }
-
-type Task struct {
-	Filename string
-	Id       int
-}
-
-var mapWg sync.WaitGroup
 
 // Your code here -- RPC handlers for the worker to call.
 
@@ -50,36 +51,126 @@ func (c *Coordinator) server() {
 }
 
 func (c *Coordinator) AssignTask(args *AssignTaskRequest, reply *AssignTaskResponse) error {
-	fmt.Printf("Recived a request from worker process id %v \n", args.Pid)
-	task, ok := <-c.tasksChannel
+	/*
+		Initially assign MapTasks.
+		When no MapsTasks are left but, few are yet to complete then assign WaitTask.
+		Once all MapTasks done execiting then assign ReduceTasks.
+		Once all ReduceTasks done executing assign TreminateTasks.
+	*/
 
-	if !ok {
-		reply.Task = Task{}
-		reply.Done = true
+	log.Printf("Recived a request from worker process id %v \n", args.Pid)
+
+	select {
+	case task, ok := <-c.tasksChannel:
+		if !ok {
+			reply.Task = Task{
+				TaskType: Terminate,
+			}
+			return nil
+		}
+
+		reply.Task = task
+		reply.NReduce = c.nReduce
+		go c.HandleCrash(task)
+		return nil
+	default:
+		reply.Task = Task{
+			Id:       -1,
+			Input:    "",
+			TaskType: Wait,
+		}
 		reply.NReduce = 0
 		return nil
 	}
-
-	reply.Task = task
-	reply.Done = false
-	reply.NReduce = c.nReduce
-	return nil
 }
 
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	ret := false
-
-	// Your code here.
-
-	return ret
+	return c.remainingMapTasksCount+c.remainingReduceTaskCount == 0
 }
 
-func (c *Coordinator) DoneMapTask(args bool, reply *bool) error {
-	mapWg.Done()
+func (c *Coordinator) DoneMapTask(taskId int, reply *bool) error {
+	if c.mapTaskIsComplete[taskId] {
+		return nil
+	} else if taskId >= len(c.mapTaskIsComplete) {
+		return errors.New("index out of bound error")
+	}
+
+	log.Printf("Completed [%v] Map Task.\n", taskId)
+	c.mapTaskIsComplete[taskId] = true
+	c.remainingMapTasksCount -= 1
+	c.mapWg.Done()
 	*reply = true
 	return nil
+}
+
+func (c *Coordinator) DoneReduceTask(taskId int, reply *bool) error {
+	if c.reduceTaskIsComplete[taskId] {
+		return nil
+	} else if taskId >= len(c.reduceTaskIsComplete) {
+		return errors.New("index out of bound error")
+	}
+
+	log.Printf("Completed [%v] Reduce Task.\n", taskId)
+	c.reduceTaskIsComplete[taskId] = true
+	c.remainingReduceTaskCount -= 1
+	c.reduceWg.Done()
+	*reply = true
+	return nil
+}
+
+func (c *Coordinator) InitMapTasks() {
+	log.Println("Starting Map Phase")
+	for index, file := range c.input {
+		c.tasksChannel <- Task{
+			Input:    file,
+			Id:       index,
+			TaskType: MapTask,
+		}
+	}
+}
+
+func (c *Coordinator) InitReduceTasks() {
+	//  wait till all map tasks are done
+	c.mapWg.Wait()
+
+	// init reduce tasks
+	c.currentPhase = ReducePhase
+	log.Println("Starting Reduce Phase")
+
+	for i := 0; i < c.nReduce; i++ {
+		c.tasksChannel <- Task{
+			Input:    strconv.Itoa(i),
+			Id:       i,
+			TaskType: ReduceTask,
+		}
+	}
+}
+
+func (c *Coordinator) InitTasks() {
+	go c.InitMapTasks()
+	go c.InitReduceTasks()
+	go func() {
+		c.mapWg.Wait()
+		c.reduceWg.Wait()
+		close(c.tasksChannel)
+	}()
+}
+
+func (c *Coordinator) HandleCrash(task Task) {
+	time.Sleep(10 * time.Second)
+
+	taskId := task.Id
+	if task.TaskType == MapTask && taskId < len(c.mapTaskIsComplete) && c.mapTaskIsComplete[taskId] {
+		return
+	} else if task.TaskType == ReduceTask && taskId < len(c.reduceTaskIsComplete) && c.reduceTaskIsComplete[taskId] {
+		return
+	}
+
+	// worker crashed. handle it.
+	// add the task back to Task chan
+	c.tasksChannel <- task
 }
 
 // create a Coordinator.
@@ -87,26 +178,20 @@ func (c *Coordinator) DoneMapTask(args bool, reply *bool) error {
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{
-		input:        files,
-		nReduce:      nReduce,
-		completed:    make([]bool, len(files)),
-		tasksChannel: make(chan Task),
+		input:                    files,
+		nReduce:                  nReduce,
+		mapTaskIsComplete:        make([]bool, len(files)),
+		reduceTaskIsComplete:     make([]bool, nReduce),
+		remainingMapTasksCount:   len(files),
+		remainingReduceTaskCount: nReduce,
+		tasksChannel:             make(chan Task),
+		currentPhase:             MapPhase,
 	}
 
 	// Your code here.
-
-	go func() {
-		for index, file := range files {
-			mapWg.Add(1)
-			c.tasksChannel <- Task{
-				Filename: file,
-				Id:       index,
-			}
-		}
-		close(c.tasksChannel)
-		mapWg.Wait()
-		fmt.Println("Done Waiting All Map task to complete")
-	}()
+	c.mapWg.Add(len(files))
+	c.reduceWg.Add(nReduce)
+	c.InitTasks()
 
 	c.server()
 	return &c

@@ -3,4 +3,5 @@ api.key
 .api.key.trimmed
 *-handin.tar.gz
 src/main/data/
-src/main/mr-out-0
+src/main/map-*
+src/main/mr-out-*
