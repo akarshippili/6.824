@@ -42,13 +42,25 @@ func AssignTaskCall() (AssignTaskResponse, error) {
 	return response, nil
 }
 
-func DoneMapTaskCall() error {
-	request := true
+func DoneMapTaskCall(task Task) error {
+	request := task.Id
 	var response bool
 
 	ok := call("Coordinator.DoneMapTask", &request, &response)
 	if !ok {
 		return errors.New("done map task rpc call failed")
+	}
+
+	return nil
+}
+
+func DoneReduceTaskCall(task Task) error {
+	request := task.Id
+	var response bool
+
+	ok := call("Coordinator.DoneReduceTask", &request, &response)
+	if !ok {
+		return errors.New("done reduce task rpc call failed")
 	}
 
 	return nil
@@ -86,7 +98,7 @@ func splitToBuckets(kva []KeyValue, numBuckets int) [][]KeyValue {
 }
 
 func writeToIntermediateFiles(mapId int, index int, bucket []KeyValue) {
-	interMediateFileName := "./data/" + "map" + "-" + strconv.Itoa(mapId) + "-" + strconv.Itoa(index)
+	interMediateFileName := "../data/" + "map" + "-" + strconv.Itoa(mapId) + "-" + strconv.Itoa(index)
 	file, err := os.Create(interMediateFileName)
 	if err != nil {
 		log.Printf("error creating file: %v \n", err.Error())
@@ -105,7 +117,7 @@ func writeToIntermediateFiles(mapId int, index int, bucket []KeyValue) {
 
 func HandleMapTask(task Task, nReduce int, mapf func(string, string) []KeyValue) {
 	log.Printf("Task id: [%v] filename: [%v] \n", task.Id, task.Input)
-	filepath := "../main/" + task.Input
+	filepath := task.Input
 	content, err := os.ReadFile(filepath)
 	if err != nil {
 		log.Printf("error reading file: %v \n", err.Error())
@@ -130,7 +142,7 @@ func HandleMapTask(task Task, nReduce int, mapf func(string, string) []KeyValue)
 	}
 
 	wg.Wait()
-	if err := DoneMapTaskCall(); err != nil {
+	if err := DoneMapTaskCall(task); err != nil {
 		log.Printf("Error during rpc call: %v", err.Error())
 	}
 	log.Printf("Done Map Task id: [%v]\n", task.Id)
@@ -165,7 +177,7 @@ func GetKeyValueArray(s string) ([]KeyValue, error) {
 		return nil, errors.New(err.Error())
 	}
 
-	files, err := GetFilesWithPattern("./data/", regex)
+	files, err := GetFilesWithPattern("../data/", regex)
 	if err != nil {
 		return nil, errors.New(err.Error())
 	}
@@ -228,7 +240,7 @@ func HandleReduceTask(task Task, reducef func(string, []string) string) {
 	}
 
 	kvMap := buildMap(kva) // kvMap := make(map[string][]string, 0)
-	file, err := os.Create("./data/" + "mr" + "-" + "out" + "-" + strconv.Itoa(task.Id))
+	file, err := os.Create("mr" + "-" + "out" + "-" + strconv.Itoa(task.Id))
 	if err != nil {
 		log.Fatalln(err.Error())
 		return
@@ -238,6 +250,11 @@ func HandleReduceTask(task Task, reducef func(string, []string) string) {
 		reduced := reducef(key, value)
 		fmt.Fprintf(file, "%v %v\n", key, reduced)
 	}
+
+	if err := DoneReduceTaskCall(task); err != nil {
+		log.Printf("Error during rpc call: %v", err.Error())
+	}
+	log.Printf("Done Reduce Task id: [%v]\n", task.Id)
 }
 
 // main/mrworker.go calls this function.
@@ -249,26 +266,27 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 	//  1. call coordinater and get the task to run
 	// 2. run the task.
 	// 3. save the key values in intermideate files with mr-X-Y.json format
+	for {
+		response, err := AssignTaskCall()
+		if err != nil {
+			log.Fatal(err)
+			return
+		}
 
-	response, err := AssignTaskCall()
-	if err != nil {
-		log.Fatal(err)
-		return
-	}
+		nReduce := response.NReduce
+		task := response.Task
 
-	nReduce := response.NReduce
-	task := response.Task
-
-	switch task.TaskType {
-	case Wait:
-		time.Sleep(time.Second)
-		Worker(mapf, reducef)
-		return
-	case Terminate:
-		os.Exit(0)
-	case MapTask:
-		HandleMapTask(task, nReduce, mapf)
-	case ReduceTask:
-		HandleReduceTask(task, reducef)
+		switch task.TaskType {
+		case Wait:
+			time.Sleep(time.Second)
+			Worker(mapf, reducef)
+			return
+		case Terminate:
+			os.Exit(0)
+		case MapTask:
+			HandleMapTask(task, nReduce, mapf)
+		case ReduceTask:
+			HandleReduceTask(task, reducef)
+		}
 	}
 }
