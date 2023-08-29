@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"errors"
 	"log"
 	"net"
 	"net/http"
@@ -12,12 +13,15 @@ import (
 
 type Coordinator struct {
 	// Your definitions here.
-	input        []string
-	nReduce      int
-	completed    []bool
-	tasksChannel chan Task
-	mapWg        sync.WaitGroup
-	currentPhase Phase
+	input                    []string
+	nReduce                  int
+	mapTaskIsComplete        []bool
+	reduceTaskIsComplete     []bool
+	remainingMapTasksCount   int
+	remainingReduceTaskCount int
+	tasksChannel             chan Task
+	mapWg                    sync.WaitGroup
+	currentPhase             Phase
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -75,23 +79,40 @@ func (c *Coordinator) AssignTask(args *AssignTaskRequest, reply *AssignTaskRespo
 		reply.NReduce = 0
 		return nil
 	}
-
 }
 
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	ret := false
-
-	// Your code here.
-
-	return ret
+	return c.remainingMapTasksCount+c.remainingReduceTaskCount == 0
 }
 
-func (c *Coordinator) DoneMapTask(args bool, reply *bool) error {
+func (c *Coordinator) DoneMapTask(taskId int, reply *bool) error {
+	if c.mapTaskIsComplete[taskId] {
+		return nil
+	} else if taskId >= len(c.mapTaskIsComplete) {
+		return errors.New("index out of bound error")
+	}
+
+	log.Printf("Completed [%v] Map Task.\n", taskId)
+	c.mapTaskIsComplete[taskId] = true
+	c.remainingMapTasksCount -= 1
 	c.mapWg.Done()
 	*reply = true
-	log.Printf("Completed Map Task")
+	return nil
+}
+
+func (c *Coordinator) DoneReduceTask(taskId int, reply *bool) error {
+	if c.reduceTaskIsComplete[taskId] {
+		return nil
+	} else if taskId >= len(c.reduceTaskIsComplete) {
+		return errors.New("index out of bound error")
+	}
+
+	log.Printf("Completed [%v] Reduce Task.\n", taskId)
+	c.reduceTaskIsComplete[taskId] = true
+	c.remainingReduceTaskCount -= 1
+	*reply = true
 	return nil
 }
 
@@ -131,11 +152,14 @@ func (c *Coordinator) InitTasks() {
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{
-		input:        files,
-		nReduce:      nReduce,
-		completed:    make([]bool, len(files)),
-		tasksChannel: make(chan Task),
-		currentPhase: MapPhase,
+		input:                    files,
+		nReduce:                  nReduce,
+		mapTaskIsComplete:        make([]bool, len(files)),
+		reduceTaskIsComplete:     make([]bool, nReduce),
+		remainingMapTasksCount:   len(files),
+		remainingReduceTaskCount: nReduce,
+		tasksChannel:             make(chan Task),
+		currentPhase:             MapPhase,
 	}
 
 	// Your code here.
