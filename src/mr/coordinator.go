@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"time"
 )
 
 type Coordinator struct {
@@ -21,6 +22,7 @@ type Coordinator struct {
 	remainingReduceTaskCount int
 	tasksChannel             chan Task
 	mapWg                    sync.WaitGroup
+	reduceWg                 sync.WaitGroup
 	currentPhase             Phase
 }
 
@@ -69,6 +71,7 @@ func (c *Coordinator) AssignTask(args *AssignTaskRequest, reply *AssignTaskRespo
 
 		reply.Task = task
 		reply.NReduce = c.nReduce
+		go c.HandleCrash(task)
 		return nil
 	default:
 		reply.Task = Task{
@@ -112,6 +115,7 @@ func (c *Coordinator) DoneReduceTask(taskId int, reply *bool) error {
 	log.Printf("Completed [%v] Reduce Task.\n", taskId)
 	c.reduceTaskIsComplete[taskId] = true
 	c.remainingReduceTaskCount -= 1
+	c.reduceWg.Done()
 	*reply = true
 	return nil
 }
@@ -128,7 +132,10 @@ func (c *Coordinator) InitMapTasks() {
 }
 
 func (c *Coordinator) InitReduceTasks() {
+	//  wait till all map tasks are done
 	c.mapWg.Wait()
+
+	// init reduce tasks
 	c.currentPhase = ReducePhase
 	log.Println("Starting Reduce Phase")
 
@@ -139,12 +146,31 @@ func (c *Coordinator) InitReduceTasks() {
 			TaskType: ReduceTask,
 		}
 	}
-	close(c.tasksChannel)
 }
 
 func (c *Coordinator) InitTasks() {
 	go c.InitMapTasks()
 	go c.InitReduceTasks()
+	go func() {
+		c.mapWg.Wait()
+		c.reduceWg.Wait()
+		close(c.tasksChannel)
+	}()
+}
+
+func (c *Coordinator) HandleCrash(task Task) {
+	time.Sleep(10 * time.Second)
+
+	taskId := task.Id
+	if task.TaskType == MapTask && taskId < len(c.mapTaskIsComplete) && c.mapTaskIsComplete[taskId] {
+		return
+	} else if task.TaskType == ReduceTask && taskId < len(c.reduceTaskIsComplete) && c.reduceTaskIsComplete[taskId] {
+		return
+	}
+
+	// worker crashed. handle it.
+	// add the task back to Task chan
+	c.tasksChannel <- task
 }
 
 // create a Coordinator.
@@ -164,6 +190,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 
 	// Your code here.
 	c.mapWg.Add(len(files))
+	c.reduceWg.Add(nReduce)
 	c.InitTasks()
 
 	c.server()
