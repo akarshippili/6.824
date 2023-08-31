@@ -1,17 +1,20 @@
-package mr
+## Problem Statement
+### 1. Your job is to implement a distributed MapReduce, consisting of two programs, the coordinator and the worker. 
 
-import (
-	"errors"
-	"log"
-	"net"
-	"net/http"
-	"net/rpc"
-	"os"
-	"strconv"
-	"sync"
-	"time"
-)
+### 2. There will be just one coordinator process, and one or more worker processes executing in parallel. 
 
+### 3. In a real system the workers would run on a bunch of different machines, but for this lab you'll run them all on a single machine. 
+
+### 4. The workers will talk to the coordinator via RPC. Each worker process will ask the coordinator for a task, read the task's input from one or more files, execute the task, and write the task's output to one or more files. 
+
+### 5. The coordinator should notice if a worker hasn't completed its task in a reasonable amount of time (for this lab, use ten seconds), and give the same task to a different worker.
+
+
+## Idea
+
+Coordinator
+
+```
 type Coordinator struct {
 	// Your definitions here.
 	input                    []string
@@ -25,17 +28,10 @@ type Coordinator struct {
 	reduceWg                 sync.WaitGroup
 	currentPhase             Phase
 }
+```
 
-// Your code here -- RPC handlers for the worker to call.
-
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
-}
-
+RPC Handlers
+```
 // start a thread that listens for RPCs from worker.go
 func (c *Coordinator) server() {
 	rpc.Register(c)
@@ -49,7 +45,9 @@ func (c *Coordinator) server() {
 	}
 	go http.Serve(l, nil)
 }
+```
 
+```
 func (c *Coordinator) AssignTask(args *AssignTaskRequest, reply *AssignTaskResponse) error {
 	/*
 		Initially assign MapTasks.
@@ -83,7 +81,9 @@ func (c *Coordinator) AssignTask(args *AssignTaskRequest, reply *AssignTaskRespo
 		return nil
 	}
 }
+```
 
+```
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
@@ -104,7 +104,9 @@ func (c *Coordinator) DoneMapTask(taskId int, reply *bool) error {
 	*reply = true
 	return nil
 }
+```
 
+```
 func (c *Coordinator) DoneReduceTask(taskId int, reply *bool) error {
 	if c.reduceTaskIsComplete[taskId] {
 		return nil
@@ -119,7 +121,9 @@ func (c *Coordinator) DoneReduceTask(taskId int, reply *bool) error {
 	*reply = true
 	return nil
 }
+```
 
+```
 func (c *Coordinator) InitMapTasks() {
 	log.Println("Starting Map Phase")
 	for index, file := range c.input {
@@ -130,7 +134,9 @@ func (c *Coordinator) InitMapTasks() {
 		}
 	}
 }
+```
 
+```
 func (c *Coordinator) InitReduceTasks() {
 	//  wait till all map tasks are done
 	c.mapWg.Wait()
@@ -147,7 +153,9 @@ func (c *Coordinator) InitReduceTasks() {
 		}
 	}
 }
+```
 
+```
 func (c *Coordinator) InitTasks() {
 	go c.InitMapTasks()
 	go c.InitReduceTasks()
@@ -157,7 +165,9 @@ func (c *Coordinator) InitTasks() {
 		close(c.tasksChannel)
 	}()
 }
+```
 
+```
 func (c *Coordinator) HandleCrash(task Task) {
 	time.Sleep(10 * time.Second)
 
@@ -172,27 +182,64 @@ func (c *Coordinator) HandleCrash(task Task) {
 	// add the task back to Task chan
 	c.tasksChannel <- task
 }
+```
 
-// create a Coordinator.
-// main/mrcoordinator.go calls this function.
-// nReduce is the number of reduce tasks to use.
-func MakeCoordinator(files []string, nReduce int) *Coordinator {
-	c := Coordinator{
-		input:                    files,
-		nReduce:                  nReduce,
-		mapTaskIsComplete:        make([]bool, len(files)),
-		reduceTaskIsComplete:     make([]bool, nReduce),
-		remainingMapTasksCount:   len(files),
-		remainingReduceTaskCount: nReduce,
-		tasksChannel:             make(chan Task),
-		currentPhase:             MapPhase,
+Worker
+```
+func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
+
+	// Your worker implementation here.
+
+	// TODO
+	//  1. call coordinater and get the task to run
+	// 2. run the task.
+	// 3. save the key values in intermideate files with mr-X-Y.json format
+	for {
+		response, err := AssignTaskCall()
+		if err != nil {
+			log.Fatal(err)
+			return
+		}
+
+		nReduce := response.NReduce
+		task := response.Task
+
+		switch task.TaskType {
+		case Wait:
+			time.Sleep(time.Second)
+			Worker(mapf, reducef)
+			return
+		case Terminate:
+			os.Exit(0)
+		case MapTask:
+			HandleMapTask(task, nReduce, mapf)
+		case ReduceTask:
+			HandleReduceTask(task, reducef)
+		}
 	}
-
-	// Your code here.
-	c.mapWg.Add(len(files))
-	c.reduceWg.Add(nReduce)
-	c.InitTasks()
-
-	c.server()
-	return &c
 }
+```
+
+Common type
+```
+type TaskType int
+type Phase int
+
+type Task struct {
+	Input    string
+	Id       int
+	TaskType TaskType
+}
+
+const (
+	MapTask TaskType = iota
+	ReduceTask
+	Wait
+	Terminate
+)
+
+const (
+	MapPhase Phase = iota
+	ReducePhase
+)
+```
