@@ -131,14 +131,12 @@ func HandleMapTask(task Task, nReduce int, mapf func(string, string) []KeyValue)
 	var wg sync.WaitGroup
 
 	for index, bucket := range buckets {
-		index := index
-		bucket := bucket
 		wg.Add(1)
 
-		go func() {
+		go func(index int, bucket []KeyValue) {
 			defer wg.Done()
 			writeToIntermediateFiles(task.Id, index, bucket)
-		}()
+		}(index, bucket)
 	}
 
 	wg.Wait()

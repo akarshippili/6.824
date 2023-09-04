@@ -14,16 +14,15 @@ import (
 
 type Coordinator struct {
 	// Your definitions here.
-	input                    []string
-	nReduce                  int
-	mapTaskIsComplete        []bool
-	reduceTaskIsComplete     []bool
-	remainingMapTasksCount   int
-	remainingReduceTaskCount int
-	tasksChannel             chan Task
-	mapWg                    sync.WaitGroup
-	reduceWg                 sync.WaitGroup
-	currentPhase             Phase
+	input                []string
+	nReduce              int
+	mapTaskIsComplete    []bool
+	reduceTaskIsComplete []bool
+	tasksChannel         chan Task
+	mapWg                sync.WaitGroup
+	reduceWg             sync.WaitGroup
+	currentPhase         Phase
+	done                 chan bool
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -87,7 +86,12 @@ func (c *Coordinator) AssignTask(args *AssignTaskRequest, reply *AssignTaskRespo
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	return c.remainingMapTasksCount+c.remainingReduceTaskCount == 0
+	select {
+	case done := <-c.done:
+		return done
+	default:
+		return false
+	}
 }
 
 func (c *Coordinator) DoneMapTask(taskId int, reply *bool) error {
@@ -99,7 +103,6 @@ func (c *Coordinator) DoneMapTask(taskId int, reply *bool) error {
 
 	log.Printf("Completed [%v] Map Task.\n", taskId)
 	c.mapTaskIsComplete[taskId] = true
-	c.remainingMapTasksCount -= 1
 	c.mapWg.Done()
 	*reply = true
 	return nil
@@ -114,7 +117,6 @@ func (c *Coordinator) DoneReduceTask(taskId int, reply *bool) error {
 
 	log.Printf("Completed [%v] Reduce Task.\n", taskId)
 	c.reduceTaskIsComplete[taskId] = true
-	c.remainingReduceTaskCount -= 1
 	c.reduceWg.Done()
 	*reply = true
 	return nil
@@ -151,11 +153,6 @@ func (c *Coordinator) InitReduceTasks() {
 func (c *Coordinator) InitTasks() {
 	go c.InitMapTasks()
 	go c.InitReduceTasks()
-	go func() {
-		c.mapWg.Wait()
-		c.reduceWg.Wait()
-		close(c.tasksChannel)
-	}()
 }
 
 func (c *Coordinator) HandleCrash(task Task) {
@@ -178,20 +175,25 @@ func (c *Coordinator) HandleCrash(task Task) {
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{
-		input:                    files,
-		nReduce:                  nReduce,
-		mapTaskIsComplete:        make([]bool, len(files)),
-		reduceTaskIsComplete:     make([]bool, nReduce),
-		remainingMapTasksCount:   len(files),
-		remainingReduceTaskCount: nReduce,
-		tasksChannel:             make(chan Task),
-		currentPhase:             MapPhase,
+		input:                files,
+		nReduce:              nReduce,
+		mapTaskIsComplete:    make([]bool, len(files)),
+		reduceTaskIsComplete: make([]bool, nReduce),
+		tasksChannel:         make(chan Task),
+		currentPhase:         MapPhase,
+		done:                 make(chan bool, 1),
 	}
 
 	// Your code here.
 	c.mapWg.Add(len(files))
 	c.reduceWg.Add(nReduce)
 	c.InitTasks()
+	go func() {
+		c.mapWg.Wait()
+		c.reduceWg.Wait()
+		close(c.tasksChannel)
+		c.done <- true
+	}()
 
 	c.server()
 	return &c
